@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: chtenant
+      POSTGRES_PASSWORD: chtenant
+      POSTGRES_DB: chtenant
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chtenant"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - chdata:/var/lib/clickhouse
+      - ./clickhouse/users.xml:/etc/clickhouse-server/users.d/default-user.xml:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  chtenant:
+    build: .
+    ports:
+      - "8124:8124"  # HTTP proxy
+      - "8125:8125"  # Admin API
+      - "9001:9001"  # Native proxy
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CHTENANT_CONFIG: /etc/chtenant/config.yaml
+    volumes:
+      - ./config.docker.yaml:/etc/chtenant/config.yaml:ro
+
+volumes:
+  pgdata:
+  chdata:

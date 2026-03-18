@@ -1,0 +1,16 @@
+proxy:
+  http_addr: ":8124"
+  native_addr: ":9001"
+
+admin:
+  addr: ":8125"
+
+postgres:
+  dsn: "postgres://chtenant:chtenant@localhost:5432/chtenant?sslmode=disable"
+
+clusters:
+  - id: default
+    http_endpoint: "http://localhost:8123"
+    native_endpoint: "localhost:9000"
+    user: "default"
+    password: ""
