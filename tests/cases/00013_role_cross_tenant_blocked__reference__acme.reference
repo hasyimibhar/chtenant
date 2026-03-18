@@ -1,0 +1,1 @@
+Code: 497. DB::Exception: acme: Not enough privileges. To execute this query, it's necessary to have the grant SELECT(id, name) ON globex__analytics.events. (ACCESS_DENIED) (version 25.1.8.25 (official build))

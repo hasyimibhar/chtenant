@@ -12,12 +12,29 @@ const Separator = "__"
 // prefixing each database name with tenantID + separator.
 //
 // Example: "SELECT * FROM foo.bar" with tenant "t1" becomes "SELECT * FROM t1__foo.bar"
+// blockedDatabases are system databases that tenants must not access.
+var blockedDatabases = []string{"system", "information_schema", "INFORMATION_SCHEMA"}
+
 func Rewrite(sql string, tenantID string) (string, error) {
 	if err := validateSelect(sql); err != nil {
 		return "", err
 	}
 
 	segments := tokenize(sql)
+
+	// Check for access to blocked databases and table functions in non-string segments.
+	for _, seg := range segments {
+		if seg.isString {
+			continue
+		}
+		if db := findBlockedDatabase(seg.text); db != "" {
+			return "", fmt.Errorf("access to %s database is not allowed", db)
+		}
+		if fn := findTableFunction(seg.text); fn != "" {
+			return "", fmt.Errorf("table functions are not allowed")
+		}
+	}
+
 	var result strings.Builder
 	for _, seg := range segments {
 		if seg.isString {
@@ -40,6 +57,11 @@ func RewriteDatabase(database string, tenantID string) string {
 func validateSelect(sql string) error {
 	trimmed := strings.TrimSpace(sql)
 	upper := strings.ToUpper(trimmed)
+
+	// Block SHOW DATABASES as it exposes all tenant database names.
+	if strings.HasPrefix(upper, "SHOW DATABASES") {
+		return fmt.Errorf("SHOW DATABASES is not allowed")
+	}
 
 	if strings.HasPrefix(upper, "SELECT") ||
 		strings.HasPrefix(upper, "WITH") ||
@@ -256,6 +278,31 @@ func findFromClauseEnd(sql string, start int) int {
 	}
 
 	return len(sql)
+}
+
+// blockedDbRe matches database.table references where the database is a blocked name.
+var blockedDbRe = regexp.MustCompile(
+	`(?i)\b(` + strings.Join(blockedDatabases, "|") + `)\.` + ident,
+)
+
+// tableFuncRe matches table functions used after FROM/JOIN:
+// merge(), remote(), remoteSecure(), url(), cluster(), clusterAllReplicas(),
+// s3(), hdfs(), jdbc(), odbc(), mysql(), postgresql(), input(), generateRandom(), numbers(), zeros(), file().
+var tableFuncRe = regexp.MustCompile(
+	`(?i)\b(?:FROM|JOIN)\s+(?:merge|remote|remoteSecure|url|cluster|clusterAllReplicas|s3|hdfs|jdbc|odbc|mysql|postgresql|input|generateRandom|numbers|zeros|file)\s*\(`,
+)
+
+func findTableFunction(sql string) string {
+	m := tableFuncRe.FindString(sql)
+	return m
+}
+
+func findBlockedDatabase(sql string) string {
+	m := blockedDbRe.FindStringSubmatch(sql)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }
 
 func stripBackticks(s string) string {

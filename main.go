@@ -15,6 +15,7 @@ import (
 	"github.com/hasyimibhar/chtenant/internal/api"
 	"github.com/hasyimibhar/chtenant/internal/cluster"
 	"github.com/hasyimibhar/chtenant/internal/config"
+	"github.com/hasyimibhar/chtenant/internal/provisioner"
 	"github.com/hasyimibhar/chtenant/internal/proxy"
 	"github.com/hasyimibhar/chtenant/internal/tenant"
 )
@@ -83,7 +84,8 @@ func main() {
 	}()
 
 	// Start admin API.
-	adminHandler := api.NewHandler(tenantStore)
+	prov := provisioner.New(clusterRegistry)
+	adminHandler := api.NewHandler(tenantStore, prov)
 	adminServer := &http.Server{
 		Addr:    cfg.Admin.Addr,
 		Handler: adminHandler,

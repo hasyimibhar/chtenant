@@ -2,10 +2,14 @@
 #
 # Multitenant integration test runner for chtenant.
 #
-# Test cases live in tests/cases/ as triplets:
+# Test cases live in tests/cases/ with these files:
 #   <name>__setup.sql                    – DDL run directly against ClickHouse (once per tenant)
-#   <name>__query.sql                    – SELECT queries run through the proxy (once per tenant)
+#   <name>__query.sql                    – queries run through the proxy (once per tenant)
+#   <name>__direct_query.sql             – queries run directly against ClickHouse as tenant user
 #   <name>__reference__<tenant>.reference – expected output for that tenant
+#
+# Use __query.sql OR __direct_query.sql (not both). Direct queries support
+# the {tenant} placeholder and run with the tenant's ClickHouse credentials.
 #
 # Setup SQL uses {tenant} as a placeholder that gets substituted with each
 # tenant ID. This lets a single setup file create per-tenant databases/tables.
@@ -40,16 +44,19 @@ info() { echo "--- $*"; }
 discover_tests() {
     local filter="${1:-}"
     local names=()
-    for f in "$CASES_DIR"/*__query.sql; do
+    for f in "$CASES_DIR"/*__query.sql "$CASES_DIR"/*__direct_query.sql; do
         [ -f "$f" ] || continue
         local name
-        name="$(basename "$f" __query.sql)"
+        name="$(basename "$f")"
+        name="${name%%__query.sql}"
+        name="${name%%__direct_query.sql}"
         if [ -n "$filter" ] && [ "$name" != "$filter" ]; then
             continue
         fi
         names+=("$name")
     done
-    printf '%s\n' "${names[@]}" | sort
+    # Deduplicate and sort.
+    printf '%s\n' "${names[@]}" | sort -u
 }
 
 # Discover tenant IDs from reference files for a given test name.
@@ -66,11 +73,21 @@ discover_tenants() {
     done | sort
 }
 
-# Create a tenant via admin API (ignore if already exists).
+# Associative array to store tenant passwords.
+declare -A tenant_passwords
+
+# Create a tenant via admin API and store the password.
 create_tenant() {
     local tenant="$1"
-    curl -sf -o /dev/null -X POST "$ADMIN_URL/api/v1/tenants" \
-        -d "{\"id\": \"$tenant\", \"cluster_id\": \"default\"}" 2>/dev/null || true
+    local resp
+    resp=$(curl -s -X POST "$ADMIN_URL/api/v1/tenants" \
+        -d "{\"id\": \"$tenant\", \"cluster_id\": \"default\"}" 2>/dev/null) || true
+    # Extract password from JSON response.
+    local pw
+    pw=$(echo "$resp" | grep -o '"password":"[^"]*"' | cut -d'"' -f4)
+    if [ -n "$pw" ]; then
+        tenant_passwords["$tenant"]="$pw"
+    fi
 }
 
 # Delete a tenant via admin API.
@@ -89,11 +106,20 @@ ch_query() {
     done <<< "$sql"
 }
 
+# Run SQL directly against ClickHouse as a specific user.
+ch_query_as() {
+    local user="$1"
+    local password="$2"
+    local sql="$3"
+    curl -s -H "X-ClickHouse-User: $user" -H "X-ClickHouse-Key: $password" \
+        "$CLICKHOUSE_URL" --data-binary "$sql"
+}
+
 # Run SQL through the proxy with a tenant header.
 proxy_query() {
     local tenant="$1"
     local sql="$2"
-    curl -sf -H "X-Tenant-ID: $tenant" "$PROXY_URL" --data-binary "$sql"
+    curl -s -H "X-Tenant-ID: $tenant" "$PROXY_URL" --data-binary "$sql"
 }
 
 # Substitute {tenant} placeholder in SQL.
@@ -116,6 +142,7 @@ run_test() {
     local test_name="$1"
     local setup_file="$CASES_DIR/${test_name}__setup.sql"
     local query_file="$CASES_DIR/${test_name}__query.sql"
+    local direct_query_file="$CASES_DIR/${test_name}__direct_query.sql"
 
     info "TEST: $test_name"
 
@@ -131,8 +158,6 @@ run_test() {
     if [ -f "$setup_file" ]; then
         setup_sql="$(cat "$setup_file")"
     fi
-    local query_sql
-    query_sql="$(cat "$query_file")"
 
     # ── Setup ──
 
@@ -159,6 +184,16 @@ run_test() {
 
     # ── Run queries and compare ──
 
+    # Determine query mode: proxy (default) or direct (ClickHouse with tenant credentials).
+    local query_sql=""
+    local query_mode="proxy"
+    if [ -f "$query_file" ]; then
+        query_sql="$(cat "$query_file")"
+    elif [ -f "$direct_query_file" ]; then
+        query_sql="$(cat "$direct_query_file")"
+        query_mode="direct"
+    fi
+
     local test_passed=true
     for tenant in $tenants; do
         local ref_file="$CASES_DIR/${test_name}__reference__${tenant}.reference"
@@ -166,7 +201,14 @@ run_test() {
         expected="$(cat "$ref_file")"
 
         local actual
-        actual="$(proxy_query "$tenant" "$query_sql" 2>&1)" || true
+        if [ "$query_mode" = "direct" ]; then
+            local pw="${tenant_passwords[$tenant]:-}"
+            local tenant_sql
+            tenant_sql="$(sub_tenant "$query_sql" "$tenant")"
+            actual="$(ch_query_as "$tenant" "$pw" "$tenant_sql" 2>&1)" || true
+        else
+            actual="$(proxy_query "$tenant" "$query_sql" 2>&1)" || true
+        fi
 
         if [ "$actual" = "$expected" ]; then
             echo "  PASS: tenant=$tenant"
