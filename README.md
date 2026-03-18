@@ -8,6 +8,45 @@ Supports both HTTP and native TCP protocols.
 
 This will be useful for building warehouse-native data product SaaS on top of ClickHouse where you want to give your customer access to their data, but at the same time minimize cost by colocating free or low-tier customer data within the same cluster.
 
+```
+                        Readers                                Writers
+                  (tenant queries)                    (e.g. ClickPipes)
+                        |                                        |
+          +-------- X-Tenant-ID --------+                        |
+          |             |               |                        |
+       [acme]       [globex]        [initech]                    |
+          |             |               |                        |
+          +-------------+---------------+                        |
+                        |                                        |
+                        v                                        |
+                  +----------+                                   |
+                  | chtenant |                                   |
+                  |  proxy   |                                   |
+                  +----------+                                   |
+                        |                                        |
+        SELECT * FROM analytics.events                           |
+                        |                                        |
+                  rewrites to:                                   |
+                        |                                        |
+        SELECT * FROM acme__analytics.events                     |
+                        |                                        |
+          +-------------+---------------+------------------------+
+          |                             |
+          v                             v
+  +----------------+          +----------------+
+  |  ClickHouse    |          |  ClickHouse    |
+  |  Cluster A     |          |  Cluster B     |
+  |                |          |                |
+  | acme__*.*      |          | initech__*.*   |
+  | globex__*.*    |          |                |
+  +----------------+          +----------------+
+
+  Tenants see isolated databases       Data is colocated in
+  (analytics.events), proxy            shared clusters, prefixed
+  rewrites + role grants               by tenant ID
+  enforce isolation
+```
+
 ## Quickstart
 
 Start services:
