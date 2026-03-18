@@ -158,22 +158,104 @@ var commaTableRe = regexp.MustCompile(
 func rewriteTableRefs(sql string, tenantID string) string {
 	prefix := tenantID + Separator
 
-	// Rewrite FROM/JOIN db.table
-	sql = dbTableRe.ReplaceAllStringFunc(sql, func(match string) string {
-		groups := dbTableRe.FindStringSubmatch(match)
-		// groups[1] = "FROM " or "JOIN ", groups[2] = db, groups[3] = table
+	rewriteMatch := func(re *regexp.Regexp, match string) string {
+		groups := re.FindStringSubmatch(match)
 		db := stripBackticks(groups[2])
 		table := groups[3]
 
-		// Don't rewrite already-prefixed databases
 		if strings.HasPrefix(db, prefix) {
 			return match
 		}
 
 		return groups[1] + prefix + db + "." + table
+	}
+
+	// Pass 1: Rewrite all FROM/JOIN db.table references.
+	sql = dbTableRe.ReplaceAllStringFunc(sql, func(m string) string {
+		return rewriteMatch(dbTableRe, m)
+	})
+
+	// Pass 2: Rewrite ", db.table" comma references within FROM clauses.
+	// We find each FROM keyword (at depth 0 relative to parentheses that
+	// started after FROM) and rewrite comma-refs until we hit a clause-ending
+	// keyword or a JOIN.
+	sql = rewriteCommaRefs(sql, prefix, func(m string) string {
+		return rewriteMatch(commaTableRe, m)
 	})
 
 	return sql
+}
+
+// fromKeywordRe finds the FROM keyword (word boundary).
+var fromKeywordRe = regexp.MustCompile(`(?i)\bFROM\b`)
+
+// clauseEndRe matches keywords that end a FROM table list.
+var clauseEndRe = regexp.MustCompile(
+	`(?i)\b(?:WHERE|ORDER|GROUP|HAVING|LIMIT|UNION|JOIN|LEFT|RIGHT|INNER|OUTER|CROSS|FULL)\b`,
+)
+
+// rewriteCommaRefs finds FROM clauses and rewrites ", db.table" within them.
+func rewriteCommaRefs(sql string, prefix string, rewrite func(string) string) string {
+	var result strings.Builder
+	pos := 0
+
+	for {
+		// Find the next FROM keyword.
+		loc := fromKeywordRe.FindStringIndex(sql[pos:])
+		if loc == nil {
+			result.WriteString(sql[pos:])
+			break
+		}
+		fromStart := pos + loc[1] // right after "FROM"
+		result.WriteString(sql[pos:fromStart])
+
+		// Find the end of this FROM's table list: scan forward, tracking
+		// parentheses depth. The FROM list ends at depth 0 when we hit a
+		// clause-ending keyword, a closing paren, or a semicolon.
+		end := findFromClauseEnd(sql, fromStart)
+		fromBody := sql[fromStart:end]
+
+		// Rewrite comma-refs within this FROM body.
+		fromBody = commaTableRe.ReplaceAllStringFunc(fromBody, rewrite)
+
+		result.WriteString(fromBody)
+		pos = end
+	}
+
+	return result.String()
+}
+
+// findFromClauseEnd returns the index where the FROM table list ends.
+func findFromClauseEnd(sql string, start int) int {
+	depth := 0
+	i := start
+
+	for i < len(sql) {
+		ch := sql[i]
+
+		switch ch {
+		case '(':
+			depth++
+			i++
+		case ')':
+			if depth == 0 {
+				return i
+			}
+			depth--
+			i++
+		default:
+			// At depth 0, check for clause-ending keywords.
+			if depth == 0 {
+				rest := sql[i:]
+				if loc := clauseEndRe.FindStringIndex(rest); loc != nil && loc[0] == 0 {
+					return i
+				}
+			}
+			i++
+		}
+	}
+
+	return len(sql)
 }
 
 func stripBackticks(s string) string {
