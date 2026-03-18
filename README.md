@@ -4,6 +4,10 @@
 
 Supports both HTTP and native TCP protocols.
 
+### Why?
+
+This will be useful for building warehouse-native data product SaaS on top of ClickHouse where you want to give your customer access to their data, but at the same time minimize cost by colocating free or low-tier customer data within the same cluster.
+
 ## Quickstart
 
 Start services:
