@@ -39,7 +39,8 @@ func (p *Provisioner) Create(tenantID, clusterID string) (*CreateResult, error) 
 	}
 
 	stmts := []string{
-		fmt.Sprintf("CREATE USER IF NOT EXISTS %s IDENTIFIED BY '%s'", tenantID, password),
+		fmt.Sprintf("DROP USER IF EXISTS %s", tenantID),
+		fmt.Sprintf("CREATE USER %s IDENTIFIED BY '%s'", tenantID, password),
 		fmt.Sprintf("GRANT SELECT ON %s__*.* TO %s", tenantID, tenantID),
 	}
 
@@ -118,7 +119,7 @@ func chExec(c *cluster.Cluster, query string) error {
 }
 
 func randomPassword(length int) (string, error) {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^*"
 	raw := make([]byte, length)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
@@ -129,6 +130,6 @@ func randomPassword(length int) (string, error) {
 	}
 	// Guarantee at least one uppercase and one special character.
 	b[0] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[int(raw[0])%26]
-	b[1] = "!@#$%^&*"[int(raw[1])%8]
+	b[1] = "!@#$%^*"[int(raw[1])%7]
 	return string(b), nil
 }

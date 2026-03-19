@@ -32,9 +32,9 @@ services:
   chtenant:
     build: .
     ports:
-      - "8124:8124"  # HTTP proxy
-      - "8125:8125"  # Admin API
-      - "9001:9001"  # Native proxy
+      - "18124:8124"  # HTTP proxy
+      - "18125:8125"  # Admin API
+      - "19001:9001"  # Native proxy
     depends_on:
       postgres:
         condition: service_healthy

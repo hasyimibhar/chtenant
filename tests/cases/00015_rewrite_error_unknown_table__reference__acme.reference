@@ -1,0 +1,1 @@
+Code: 60. DB::Exception: Unknown table expression identifier 'analytics.no_such_table' in scope SELECT * FROM analytics.no_such_table. (UNKNOWN_TABLE)

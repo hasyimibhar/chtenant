@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/hasyimibhar/chtenant/internal/cluster"
@@ -134,6 +135,25 @@ func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	// For error responses, rewrite the body to strip tenant prefix
+	// so tenants don't see internal database names.
+	if resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		rewritten := rewriteErrorResponse(string(respBody), tenantID)
+		// Copy response headers (skip Content-Length since body length may change).
+		for k, vals := range resp.Header {
+			if strings.EqualFold(k, "Content-Length") {
+				continue
+			}
+			for _, v := range vals {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.WriteString(w, rewritten)
+		return
+	}
+
 	// Copy response headers.
 	for k, vals := range resp.Header {
 		for _, v := range vals {
@@ -147,6 +167,18 @@ func (p *HTTPProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (p *HTTPProxy) Shutdown(ctx context.Context) error {
 	p.client.CloseIdleConnections()
 	return nil
+}
+
+// versionRe matches the ClickHouse version suffix in error messages.
+var versionRe = regexp.MustCompile(`\s*\(version \d+\.\d+\.\d+\.\d+ \([^)]*\)\)`)
+
+// rewriteErrorResponse strips the tenant prefix from database names and
+// removes the ClickHouse version string from error messages.
+func rewriteErrorResponse(body string, tenantID string) string {
+	prefix := tenantID + rewriter.Separator
+	body = strings.ReplaceAll(body, prefix, "")
+	body = versionRe.ReplaceAllString(body, "")
+	return body
 }
 
 func truncate(s string, n int) string {
