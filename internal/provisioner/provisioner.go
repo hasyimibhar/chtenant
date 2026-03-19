@@ -2,7 +2,6 @@ package provisioner
 
 import (
 	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -118,10 +117,18 @@ func chExec(c *cluster.Cluster, query string) error {
 	return nil
 }
 
-func randomPassword(nBytes int) (string, error) {
-	b := make([]byte, nBytes)
-	if _, err := rand.Read(b); err != nil {
+func randomPassword(length int) (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+	raw := make([]byte, length)
+	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(b), nil
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[int(raw[i])%len(charset)]
+	}
+	// Guarantee at least one uppercase and one special character.
+	b[0] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[int(raw[0])%26]
+	b[1] = "!@#$%^&*"[int(raw[1])%8]
+	return string(b), nil
 }
